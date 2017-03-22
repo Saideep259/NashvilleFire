@@ -20,27 +20,31 @@ nclusters = len(set(firedf.Cluster))
 
 with open("dict_hexdata_prob.pickle","rb") as freq3:
     hexlocation = pickle.load(freq3)
+    
+with open("dict_hexdata_prob_noweather.pickle","rb") as freq4:
+    hexlocation_noweath = pickle.load(freq4)
 
 ## ===========================
 # Changeable parameters
-weather = ['clear-day', 'clear-day','clear-night','clear-night']
+curr_weather = 'clear-day'
 day='Monday'
-intersection_dist = 'Far_From_Intersection'
-acc_nature = 'rollover'
-severity = 'B'
-month = 'MARCH'
-timenow = 10*60*60 
-analysistime = 15*60*60 
+month = 'FEBRUARY'
+timenow = 10*60*60             # Seconds from 12 am of the current day
+datenow =  27
+analysistime = 35*24*60*60        # in seconds
 
 ## ===========================
 # Initialize other parameters
 
 days_week = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-days_week2 = 2*['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+days_month = [31,28,31,30,31,30,31,31,30,31,30,31]
+months_year = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER']
 
-
-time_cuts = 60*60*np.array([0,6,12,18,24])
+time_cuts = 60*60*np.array([0,6,12,18,24]) # in seconds
 tod_values = ['Early_Morning','Late_Morning','After_Noon','Night']
+
+## ==========================
+## Estimate disc TOD
 
 if timenow > 0 and timenow < 6:
     disc_tod = 'Early_Morning'
@@ -51,10 +55,10 @@ elif timenow>12*60*60 and timenow<18*60*60:
 else:
     disc_tod = 'Night'
 
-time_ineach = []
-tod_ineach = [disc_tod]
+time_ineach = [] # amount of time in each segment
+tod_ineach = [disc_tod] # discrete time value in each segment
 
-tinitial = time_cuts[tod_values.index(disc_tod) + 1]-timenow
+tinitial = time_cuts[tod_values.index(disc_tod) + 1]-timenow # remaining time in the current segment
 
 if tinitial < analysistime:
     time_ineach.append(tinitial)
@@ -88,26 +92,53 @@ if analysistime > tinitial:
         tod_ineach.append(repeat_tod_values[initial_index + tmp+1])
         
 # Time in each total
-time_ineach_total = []
+time_ineach_total = [] # cumulative time by each segment, used for survival probability calculations
 time_ineach_total.append(time_ineach[0])
 
 for i1 in range(1, len(time_ineach)):
     time_ineach_total.append(time_ineach_total[i1-1] + time_ineach[i1])
     
-time_ineach_total_add_initial = []
+time_ineach_total_add_initial = [] # add initial time (current time) to the analysis time 
 for i1 in range(len(time_ineach_total)):
     time_ineach_total_add_initial.append(timenow+time_ineach_total[i1])
 
-index_currentday = days_week2.index(day)
+## ==========================
+## Estimate day 
 
-# Assumption: analysis time is less than 24 hrs
-day_ineach = []
+index_currentday = days_week.index(day) # obtain the index of current day in the list of days
+
+day_ineach = [] # obtain the day in each month
+week_repeat = ((analysistime/(24*60*60*7))+1)*days_week
+
 for i1 in range(len(time_ineach_total)):
-    if time_ineach_total_add_initial[i1]>24*60*60:
-        day_ineach.append(days_week2[index_currentday+1])
-    else:
-        day_ineach.append(days_week2[index_currentday])
+    future_day = (time_ineach_total_add_initial[i1]-1)/(24*60*60)
+    
+    day_ineach.append(week_repeat[index_currentday+future_day])
+ 
+## ==========================
+## Estimate month
         
+days_currentmonth = days_month[months_year.index(month)]
+
+date_ineach = [datenow]
+month_ineach = [month]
+month_repeat2 = 2*months_year
+
+
+for i1 in range(1,len(time_ineach_total)):
+    if day_ineach[i1]==day_ineach[i1-1]: # same day
+        date_ineach.append(date_ineach[i1-1])
+        month_ineach.append(month_ineach[i1-1])
+    else:
+        nextday = date_ineach[i1-1]+1
+        if nextday > days_month[months_year.index(month_ineach[i1-1])]: # next month, next day
+            date_ineach.append(1)
+            month_ineach.append(month_repeat2[month_repeat2.index(month_ineach[i1-1])+1])
+        else:
+            # next day, same month
+            date_ineach.append(date_ineach[i1-1]+1)
+            month_ineach.append(month_ineach[i1-1])
+            
 
 ## ========================
 # Analysis time is divided into multiple segments based on disc TOD and day
@@ -132,22 +163,32 @@ for i3 in range(num_segments):
 cluster_hex_probs_segments = []
 
 for i3 in range(num_segments):
-    hex_dict = {} # key: cluster, value = probabilities of locations (also a dictionary)
-    for i1 in range(nclusters):
-        if cluster_failure_probs_segments[i3][i1]>0:
-            features_tuple = (weather[i3], tod_ineach[i3], day_ineach[i3], month)
-            str_features_tuple = str(features_tuple)
-            hex_dict[i1+1] = hexlocation[i1+1][str_features_tuple]
-        else:
-            hex_dict[i1+1] = {}
-            
-    cluster_hex_probs_segments.append(hex_dict)
+    if i3==0:
+        hex_dict = {} # key: cluster, value = probabilities of locations (also a dictionary)
+        for i1 in range(nclusters):
+            if cluster_failure_probs_segments[i3][i1]>0:
+                features_tuple = (curr_weather, tod_ineach[i3], day_ineach[i3], month_ineach[i3])
+                str_features_tuple = str(features_tuple)
+                hex_dict[i1+1] = hexlocation[i1+1][str_features_tuple]
+            else:
+                hex_dict[i1+1] = {}
+                
+        cluster_hex_probs_segments.append(hex_dict)
+    else:
+        hex_dict = {} # key: cluster, value = probabilities of locations (also a dictionary)
+        for i1 in range(nclusters):
+            if cluster_failure_probs_segments[i3][i1]>0:
+                features_tuple = (tod_ineach[i3], day_ineach[i3], month_ineach[i3])
+                str_features_tuple = str(features_tuple)
+                hex_dict[i1+1] = hexlocation_noweath[i1+1][str_features_tuple]
+            else:
+                hex_dict[i1+1] = {}
+                
+        cluster_hex_probs_segments.append(hex_dict)
     
 
 ## ==================================
 # Compute overall probabilities
-# For each cluster, predict the failure probabilities in hex locations 
-
 cluster_hexprobs_predict = {}
 cluster_hexprobs_predict_combine = {}
 
